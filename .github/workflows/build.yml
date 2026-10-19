@@ -18,29 +18,30 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Flutter
+      - name: Set up Latest Stable Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
           channel: 'stable'
 
-      - name: Generate Android Platform Files Safely & Set MinSDK 24
+      - name: Generate Android Platform Files & Enforce SDK 24
         run: |
           cp pubspec.yaml pubspec.yaml.bak
           cp lib/main.dart main.dart.bak
-          flutter create --platforms=android --org com.wonderways.statuscrisp .
+          flutter create --platforms=android --org com.wonderways.statuscrisp --project-name status_crisp .
+          rm -rf test
           mv pubspec.yaml.bak pubspec.yaml
           mv main.dart.bak lib/main.dart
+
+          # Enforce minSdk 24 across both Groovy and Kotlin DSL Gradle files
           if [ -f android/app/build.gradle ]; then
-            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle
-            sed -i 's/minSdk flutter.minSdkVersion/minSdk 24/g' android/app/build.gradle
+            sed -i 's/minSdkVersion .*/minSdkVersion 24/g' android/app/build.gradle
+            sed -i 's/minSdk .*/minSdk = 24/g' android/app/build.gradle
           fi
           if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts
+            sed -i 's/minSdk = .*/minSdk = 24/g' android/app/build.gradle.kts
           fi
 
-      - name: Install Flutter Dependencies
+      - name: Fetch Dependencies
         run: flutter pub get
 
       - name: Build Release APK (arm64 for Modern Android Phones)
