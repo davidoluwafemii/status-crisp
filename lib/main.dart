@@ -128,11 +128,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final trimFlag = _trimTo30s ? '-t 30 ' : '';
 
-    // 4. Strict CRF 21 + 1950k Maxrate so file sits under ~7.5MB and bypasses WhatsApp re-compression
+   // 4. Optimized Fast FFmpeg Command (Beates WhatsApp in seconds, not minutes)
     final command = '-y $trimFlag-i "${_selectedVideo!.path}" '
         '-vf "$vfChain" '
-        '-c:v libx264 -profile:v high -level:v 4.1 -preset veryfast '
-        '-crf 21 -maxrate 1950k -bufsize 3900k -g 60 -keyint_min 30 '
+        '-c:v libx264 -profile:v high -level:v 4.1 -preset ultrafast '
+        '-crf 23 -maxrate 1950k -bufsize 3900k -g 60 -keyint_min 30 '
         '-color_primaries bt709 -color_trc bt709 -colorspace bt709 '
         '-c:a aac -b:a 128k -ar 44100 '
         '-movflags +faststart "$outputPath"';
