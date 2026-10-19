@@ -50,6 +50,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _statusMessage = 'Tap to select a 4K, 60fps, or HDR video';
   double _progressPercent = 0.0;
 
+  // Last line printed by FFmpeg, shown on screen so we can see what it is doing.
+  String _lastLog = '';
+
   String _sharpnessMode = 'ultra'; // 'ultra', 'natural', 'off'
   bool _hdrColorFix = true;
   bool _trimTo30s = true;
@@ -81,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _selectedVideo = file;
           _outputVideoPath = null;
           _progressPercent = 0.0;
+          _lastLog = '';
           _statusMessage =
               'Original: ${sizeInMb.toStringAsFixed(1)} MB • Ready for Native Crisp';
         });
@@ -90,6 +94,14 @@ class _HomeScreenState extends State<HomeScreen> {
         _statusMessage = 'Could not load video: $e';
       });
     }
+  }
+
+  // Returns the last few non-empty lines of an FFmpeg log.
+  String _tail(String? logs) {
+    if (logs == null) return '';
+    final lines = logs.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    final start = lines.length > 4 ? lines.length - 4 : 0;
+    return lines.sublist(start).join('\n');
   }
 
   Future<void> _optimizeForWhatsApp() async {
@@ -103,6 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _isProcessing = true;
       _progressPercent = 0.05;
+      _lastLog = '';
       _statusMessage = 'Running Native libx264 High-Profile Engine...';
     });
 
@@ -128,8 +141,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final trimFlag = _trimTo30s ? '-t 30 ' : '';
 
-   // 4. Optimized Fast FFmpeg Command (Beates WhatsApp in seconds, not minutes)
-    final command = '-y $trimFlag-i "${_selectedVideo!.path}" '
+    // 4. FFmpeg command. -nostdin stops FFmpeg from waiting for keyboard input.
+    final command = '-y -nostdin $trimFlag-i "${_selectedVideo!.path}" '
         '-vf "$vfChain" '
         '-c:v libx264 -profile:v high -level:v 4.1 -preset ultrafast '
         '-crf 23 -maxrate 1950k -bufsize 3900k -g 60 -keyint_min 30 '
@@ -137,50 +150,77 @@ class _HomeScreenState extends State<HomeScreen> {
         '-c:a aac -b:a 128k -ar 44100 '
         '-movflags +faststart "$outputPath"';
 
-    await FFmpegKit.executeAsync(
-      command,
-      (session) async {
-        final returnCode = await session.getReturnCode();
-        if (ReturnCode.isSuccess(returnCode)) {
-          final outFile = File(outputPath);
-          final outSizeMb = (await outFile.length()) / (1024 * 1024);
+    try {
+      await FFmpegKit.executeAsync(
+        command,
+        // Runs when FFmpeg finishes. Wrapped in try/catch so any hidden
+        // error is shown on screen instead of freezing the app silently.
+        (session) async {
+          try {
+            final returnCode = await session.getReturnCode();
+            if (ReturnCode.isSuccess(returnCode)) {
+              final outFile = File(outputPath);
+              if (!await outFile.exists()) {
+                throw Exception('FFmpeg said done but the file is missing');
+              }
+              final outSizeMb = (await outFile.length()) / (1024 * 1024);
 
-          if (!_isPro) {
-            final prefs = await SharedPreferences.getInstance();
-            _freeExportsLeft = (_freeExportsLeft - 1).clamp(0, 99);
-            await prefs.setInt('sc_free_left', _freeExportsLeft);
+              if (!_isPro) {
+                final prefs = await SharedPreferences.getInstance();
+                _freeExportsLeft = (_freeExportsLeft - 1).clamp(0, 99);
+                await prefs.setInt('sc_free_left', _freeExportsLeft);
+              }
+
+              if (!mounted) return;
+              setState(() {
+                _isProcessing = false;
+                _outputVideoPath = outputPath;
+                _progressPercent = 1.0;
+                _statusMessage =
+                    'Crisp HD Ready! Final Size: ${outSizeMb.toStringAsFixed(1)} MB';
+              });
+            } else {
+              final logs = await session.getAllLogsAsString();
+              if (!mounted) return;
+              setState(() {
+                _isProcessing = false;
+                _statusMessage = 'Encoding error.\n${_tail(logs)}';
+              });
+            }
+          } catch (e) {
+            if (!mounted) return;
+            setState(() {
+              _isProcessing = false;
+              _statusMessage = 'Finish step failed: $e';
+            });
           }
-
-          if (!mounted) return;
-          setState(() {
-            _isProcessing = false;
-            _outputVideoPath = outputPath;
-            _progressPercent = 1.0;
-            _statusMessage =
-                'Crisp HD Ready! Final Size: ${outSizeMb.toStringAsFixed(1)} MB';
-          });
-        } else {
-          final logs = await session.getAllLogsAsString();
-          if (!mounted) return;
-          setState(() {
-            _isProcessing = false;
-            _statusMessage =
-                'Encoding error. Check clip format.\n${logs?.split('\n').last ?? ''}';
-          });
-        }
-      },
-      null,
-      (Statistics stats) {
-        final timeMs = stats.getTime();
-        if (timeMs > 0 && mounted) {
-          setState(() {
-            _progressPercent = (timeMs / 30000).clamp(0.08, 0.98);
-            _statusMessage =
-                'Crisping frames: ${(timeMs / 1000).toStringAsFixed(1)}s encoded...';
-          });
-        }
-      },
-    );
+        },
+        // Live FFmpeg log: shows the last line on screen.
+        (log) {
+          final msg = (log.getMessage() ?? '').toString().trim();
+          if (mounted && msg.isNotEmpty && msg != _lastLog) {
+            setState(() => _lastLog = msg);
+          }
+        },
+        // Progress.
+        (Statistics stats) {
+          final timeMs = stats.getTime();
+          if (timeMs > 0 && mounted) {
+            setState(() {
+              _progressPercent = (timeMs / 30000).clamp(0.08, 0.98);
+              _statusMessage =
+                  'Crisping frames: ${(timeMs / 1000).toStringAsFixed(1)}s encoded...';
+            });
+          }
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isProcessing = false;
+        _statusMessage = 'Could not start encoder: $e';
+      });
+    }
   }
 
   Future<void> _shareToWhatsApp() async {
@@ -320,15 +360,30 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       if (_isProcessing) ...[
                         const SizedBox(height: 16),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 40),
+                        // No value = moving bar, because we do not know the
+                        // real video length for an honest percentage.
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 40),
                           child: LinearProgressIndicator(
-                            value: _progressPercent,
                             backgroundColor: Colors.white10,
-                            color: const Color(0xFF10B981),
+                            color: Color(0xFF10B981),
                             minHeight: 6,
                           ),
                         ),
+                        if (_lastLog.isNotEmpty) ...[
+                          const SizedBox(height: 14),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              _lastLog,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  fontSize: 10, color: Colors.white38),
+                            ),
+                          ),
+                        ],
                       ],
                     ],
                   ),
