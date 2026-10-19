@@ -1,0 +1,24 @@
+name: status_crisp
+description: "Pure 4K/HDR to WhatsApp Status HD Optimizer"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  image_picker: ^1.1.2
+  ffmpeg_kit_flutter_full_gpl: ^6.0.3
+  path_provider: ^2.1.4
+  share_plus: ^10.0.2
+  shared_preferences: ^2.3.2
+  url_launcher: ^6.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
