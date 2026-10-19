@@ -72,16 +72,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _pickVideo() async {
-    final XFile? video = await _picker.pickVideo(source: ImageSource.gallery);
-    if (video != null) {
-      final file = File(video.path);
-      final sizeInMb = (await file.length()) / (1024 * 1024);
+    try {
+      final XFile? video = await _picker.pickVideo(source: ImageSource.gallery);
+      if (video != null) {
+        final file = File(video.path);
+        final sizeInMb = (await file.length()) / (1024 * 1024);
+        setState(() {
+          _selectedVideo = file;
+          _outputVideoPath = null;
+          _progressPercent = 0.0;
+          _statusMessage =
+              'Original: ${sizeInMb.toStringAsFixed(1)} MB • Ready for Native Crisp';
+        });
+      }
+    } catch (e) {
       setState(() {
-        _selectedVideo = file;
-        _outputVideoPath = null;
-        _progressPercent = 0.0;
-        _statusMessage =
-            'Original: ${sizeInMb.toStringAsFixed(1)} MB • Ready for Native Crisp';
+        _statusMessage = 'Could not load video: $e';
       });
     }
   }
@@ -104,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final outputPath =
         '${tempDir.path}/StatusCrisp_HD_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
-    // 1. Unsharp Mask Matrix (PureStatus secret sauce to keep 4K detail on 1080p)
+    // 1. Unsharp Mask Matrix (PureStatus-grade luma & chroma edge sharpening)
     String sharpenFilter = '';
     if (_sharpnessMode == 'ultra') {
       sharpenFilter = ',unsharp=5:5:0.85:3:3:0.4';
@@ -116,16 +122,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final colorFilter =
         _hdrColorFix ? ',eq=contrast=1.06:saturation=1.10:brightness=0.01' : '';
 
-    // 3. Exact Lanczos Scaling to 1080x1920 + 30fps lock + 8-bit yuv420p
+    // 3. Foolproof Even-Dimension Lanczos Scaling (Never fails on odd aspect ratios)
     final vfChain =
-        'scale=\'min(1080,iw)\':\'min(1920,ih)\':force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd+full_chroma_int,pad=ceil(iw/2)*2:ceil(ih/2)*2$sharpenFilter$colorFilter,fps=30,format=yuv420p';
+        'scale=\'min(1080,iw)\':-2:flags=lanczos$sharpenFilter$colorFilter,fps=30,format=yuv420p';
 
     final trimFlag = _trimTo30s ? '-t 30 ' : '';
 
     // 4. Strict CRF 21 + 1950k Maxrate so file sits under ~7.5MB and bypasses WhatsApp re-compression
     final command = '-y $trimFlag-i "${_selectedVideo!.path}" '
         '-vf "$vfChain" '
-        '-c:v libx264 -profile:v high -level:v 4.1 -preset slow '
+        '-c:v libx264 -profile:v high -level:v 4.1 -preset veryfast '
         '-crf 21 -maxrate 1950k -bufsize 3900k -g 60 -keyint_min 30 '
         '-color_primaries bt709 -color_trc bt709 -colorspace bt709 '
         '-c:a aac -b:a 128k -ar 44100 '
@@ -141,10 +147,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
           if (!_isPro) {
             final prefs = await SharedPreferences.getInstance();
-            _freeExportsLeft--;
+            _freeExportsLeft = (_freeExportsLeft - 1).clamp(0, 99);
             await prefs.setInt('sc_free_left', _freeExportsLeft);
           }
 
+          if (!mounted) return;
           setState(() {
             _isProcessing = false;
             _outputVideoPath = outputPath;
@@ -153,16 +160,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 'Crisp HD Ready! Final Size: ${outSizeMb.toStringAsFixed(1)} MB';
           });
         } else {
+          final logs = await session.getAllLogsAsString();
+          if (!mounted) return;
           setState(() {
             _isProcessing = false;
-            _statusMessage = 'Encoding error. Please try another clip.';
+            _statusMessage =
+                'Encoding error. Check clip format.\n${logs?.split('\n').last ?? ''}';
           });
         }
       },
       null,
       (Statistics stats) {
         final timeMs = stats.getTime();
-        if (timeMs > 0) {
+        if (timeMs > 0 && mounted) {
           setState(() {
             _progressPercent = (timeMs / 30000).clamp(0.08, 0.98);
             _statusMessage =
@@ -215,7 +225,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 onPressed: () async {
-                  // Replace with your live Paystack Payment Page URL when ready
+                  final Uri paystackUrl =
+                      Uri.parse('https://paystack.com/pay/statuscrisp-pro');
+                  if (await canLaunchUrl(paystackUrl)) {
+                    await launchUrl(paystackUrl,
+                        mode: LaunchMode.externalApplication);
+                  }
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setBool('sc_is_pro', true);
                   setState(() => _isPro = true);
@@ -249,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               decoration: BoxDecoration(
                 color: _isPro
-                    ? const Color(0xFF10B981).withOpacity(0.2)
+                    ? const Color(0xFF10B981).withValues(alpha: 0.2)
                     : Colors.white10,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
@@ -321,8 +336,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
-
-            // Sharpness Mode Selector
             Row(
               children: [
                 _buildSharpChip('ultra', 'Ultra Crisp (4K)'),
@@ -333,7 +346,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             const SizedBox(height: 12),
-
             Container(
               decoration: BoxDecoration(
                 color: const Color(0xFF111928),
@@ -363,7 +375,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
-
             if (_outputVideoPath == null)
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -412,7 +423,7 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
             color: isSelected
-                ? const Color(0xFF10B981).withOpacity(0.2)
+                ? const Color(0xFF10B981).withValues(alpha: 0.2)
                 : const Color(0xFF111928),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
